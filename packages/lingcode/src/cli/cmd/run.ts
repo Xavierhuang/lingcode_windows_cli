@@ -822,11 +822,29 @@ export const RunCommand = effectCmd({
             })
             UI.empty()
             UI.println(
-              `${UI.Style.TEXT_DIM}lingcode REPL — type /quit or Ctrl-D to exit, /help for commands${UI.Style.TEXT_NORMAL}`,
+              `${UI.Style.TEXT_DIM}lingcode REPL — /help for commands, /model to switch model, /quit to exit${UI.Style.TEXT_NORMAL}`,
             )
             UI.empty()
 
-            const turnModel = pick(args.model)
+            // Mutable so /model can swap the active model mid-session. The
+            // Windows REPL has no opentui model picker (the TUI crashes on
+            // win32), so these slash commands are the only in-session way to
+            // switch provider/model here.
+            let turnModel = pick(args.model)
+            const fmtModel = () => (turnModel ? `${turnModel.providerID}/${turnModel.modelID}` : "(provider default)")
+            // Connected providers first; fall back to the full catalog. Each
+            // entry is { id, models: Record<modelID, info> }.
+            const fetchProviders = async () => {
+              const connected = await client.config
+                .providers({ directory: cwd })
+                .then((r) => r.data?.providers)
+                .catch(() => undefined)
+              if (connected && connected.length) return connected
+              return client.provider
+                .list()
+                .then((r) => r.data?.all ?? [])
+                .catch(() => [])
+            }
 
             while (true) {
               let line: string
@@ -839,9 +857,62 @@ export const RunCommand = effectCmd({
               if (!text) continue
               if (text === "/quit" || text === "/exit" || text === "/q") break
               if (text === "/help") {
-                UI.println("  /quit, /exit, /q — leave the REPL")
-                UI.println("  /help            — this message")
-                UI.println("  Ctrl-D           — also exits")
+                UI.println("  /model [provider/model] — show or switch the active model")
+                UI.println("  /models [filter]        — list available models (optionally filtered)")
+                UI.println("  /provider               — list connected providers")
+                UI.println("  /quit, /exit, /q        — leave the REPL")
+                UI.println("  /help                   — this message")
+                UI.println("  Ctrl-D                  — also exits")
+                continue
+              }
+              if (text === "/provider" || text === "/providers") {
+                const providers = await fetchProviders()
+                if (!providers.length) UI.println("  no providers connected — run `lingcode providers login`")
+                else for (const p of providers) UI.println(`  ${p.id}`)
+                continue
+              }
+              if (text === "/models" || text.startsWith("/models ")) {
+                const filter = text.slice("/models".length).trim().toLowerCase()
+                const providers = await fetchProviders()
+                const current = fmtModel()
+                const ids: string[] = []
+                for (const p of providers)
+                  for (const modelID of Object.keys(p.models ?? {})) {
+                    const id = `${p.id}/${modelID}`
+                    if (!filter || id.toLowerCase().includes(filter)) ids.push(id)
+                  }
+                if (!ids.length)
+                  UI.println(
+                    filter
+                      ? `  no models match "${filter}"`
+                      : "  no models available — run `lingcode providers login` first",
+                  )
+                else for (const id of ids.sort()) UI.println(`  ${id === current ? "*" : " "} ${id}`)
+                continue
+              }
+              if (text === "/model" || text.startsWith("/model ")) {
+                const arg = text.slice("/model".length).trim()
+                if (!arg) {
+                  UI.println(`  current model: ${fmtModel()}`)
+                  UI.println("  usage: /model <provider/model>  (run /models to list)")
+                  continue
+                }
+                if (!arg.includes("/")) {
+                  UI.println("  format: provider/model, e.g. anthropic/claude-sonnet-4-5")
+                  continue
+                }
+                const next = pick(arg)
+                const providers = await fetchProviders()
+                const exists = providers.some(
+                  (p) => p.id === next?.providerID && Object.keys(p.models ?? {}).includes(next?.modelID ?? ""),
+                )
+                if (!exists) {
+                  UI.println(`  unknown or unavailable model: ${arg}`)
+                  UI.println("  run /models to see what's available, or `lingcode providers login` to add a provider")
+                  continue
+                }
+                turnModel = next
+                UI.println(`  ${UI.Style.TEXT_SUCCESS_BOLD}✓ switched to ${arg}${UI.Style.TEXT_NORMAL}`)
                 continue
               }
 
