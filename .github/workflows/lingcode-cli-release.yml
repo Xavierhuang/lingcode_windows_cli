@@ -52,7 +52,7 @@ jobs:
           OPENCODE_CHANNEL: latest
 
       - name: Package release archives
-        run: ./packages/lingcode/script/package-cli.ts
+        run: bun packages/lingcode/script/package-cli.ts
         env:
           OPENCODE_VERSION: ${{ inputs.version }}
 
