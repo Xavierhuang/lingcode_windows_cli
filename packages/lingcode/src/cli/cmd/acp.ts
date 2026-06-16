@@ -7,6 +7,7 @@ import { Server } from "@/server/server"
 import { ServerAuth } from "@/server/auth"
 import { createOpencodeClient } from "@lingcode-ai/sdk/v2"
 import { withNetworkOptions, resolveNetworkOptions } from "../network"
+import { requireLoginOrExit } from "../auth-guard"
 
 const log = Log.create({ service: "acp-command" })
 
@@ -21,6 +22,9 @@ export const AcpCommand = effectCmd({
     })
   },
   handler: Effect.fn("Cli.acp")(function* (args) {
+    // Require a usable credential before bridging to an IDE; without one every
+    // model request fails. Prints a sign-in message and exits if not logged in.
+    requireLoginOrExit()
     process.env.OPENCODE_CLIENT = "acp"
     const opts = yield* resolveNetworkOptions(args)
     const server = yield* Effect.promise(() => Server.listen(opts))

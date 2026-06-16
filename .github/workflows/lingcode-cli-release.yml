@@ -1,0 +1,138 @@
+name: lingcode-cli-release
+run-name: "lingcode CLI ${{ inputs.version }}"
+
+# Self-contained release pipeline for the LingCode fork (Linux/Windows CLI).
+#
+# Builds all 12 CLI targets on Linux (where the @opentui/core native variants
+# extract correctly — they do NOT on Windows), packages them into the exact
+# archive names the lingcode.dev installers fetch, and publishes them.
+#
+# Unlike the inherited publish.yml (gated to anomalyco/opencode), this runs on
+# THIS fork. No Azure code signing — v0.9.x ships unsigned (SmartScreen warns
+# on first run; documented in README).
+#
+# Trigger from the Actions tab → "lingcode-cli-release" → Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.9.0 or v0.9.0-rc6)"
+        required: true
+        type: string
+      publish_github_release:
+        description: "Create/update a GitHub Release and upload the zips"
+        required: false
+        default: true
+        type: boolean
+      deploy_to_website:
+        description: "rsync the zips to lingcode.dev (/var/www/html) + purge Cloudflare"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Install zip
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: Build all CLI targets
+        run: ./packages/lingcode/script/build.ts
+        env:
+          OPENCODE_VERSION: ${{ inputs.version }}
+          OPENCODE_CHANNEL: latest
+
+      - name: Package release archives
+        run: ./packages/lingcode/script/package-cli.ts
+        env:
+          OPENCODE_VERSION: ${{ inputs.version }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lingcode-cli-release
+          path: packages/lingcode/dist/release/*
+
+      - name: Publish GitHub Release
+        if: ${{ inputs.publish_github_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ inputs.version }}"
+          case "$V" in v*) TAG="$V" ;; *) TAG="v$V" ;; esac
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes "LingCode CLI $TAG" \
+            || echo "release $TAG already exists, uploading assets"
+          gh release upload "$TAG" \
+            packages/lingcode/dist/release/*.zip \
+            packages/lingcode/dist/release/cliv2-latest.json \
+            --clobber --repo "$GITHUB_REPOSITORY"
+
+      # ----------------------------------------------------------------------
+      # DEPLOY TO lingcode.dev — nginx serves /var/www/html on the droplet
+      # (45.55.39.39), Cloudflare in front. Mirrors website/deploy.sh: rsync the
+      # artifacts into the web root, then purge the ONE fixed-name file
+      # (cliv2-latest.json) so the upgrade check doesn't serve a stale version
+      # for ~4h. The versioned zips have unique names and are never cached stale.
+      #
+      # Required secrets:
+      #   LINGCODE_DEPLOY_SSH_KEY  — private key with root@45.55.39.39 access
+      #   CLOUDFLARE_API_TOKEN     — Zone → Cache Purge permission   (optional)
+      #   CLOUDFLARE_ZONE_ID       — lingcode.dev zone id            (optional)
+      # Optional overrides (vars): LINGCODE_DEPLOY_HOST, LINGCODE_SSH_USER
+      # ----------------------------------------------------------------------
+      - name: Deploy to lingcode.dev
+        if: ${{ inputs.deploy_to_website }}
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.LINGCODE_DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ vars.LINGCODE_DEPLOY_HOST || '45.55.39.39' }}
+          DEPLOY_USER: ${{ vars.LINGCODE_SSH_USER || 'root' }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_SSH_KEY:-}" ]; then
+            echo "::error::LINGCODE_DEPLOY_SSH_KEY secret not set — cannot deploy. Add it or set deploy_to_website=false."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          echo "rsync release/ -> $DEPLOY_USER@$DEPLOY_HOST:/var/www/html/"
+          rsync -avz -e "ssh -i ~/.ssh/id_deploy" \
+            packages/lingcode/dist/release/ \
+            "$DEPLOY_USER@$DEPLOY_HOST:/var/www/html/"
+
+          # Purge the fixed-name upgrade manifest (versioned zips don't need it).
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
+            echo "Purging Cloudflare cache for cliv2-latest.json..."
+            curl -sf -X POST \
+              "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data '{"files":["https://lingcode.dev/cliv2-latest.json"]}' \
+              | grep -q '"success":true' \
+              && echo "  ✓ purged cliv2-latest.json" \
+              || echo "  ⚠️  purge failed — purge it manually or upgrade checks serve the old version until the edge TTL expires."
+          else
+            echo "ℹ️  Cloudflare purge skipped (set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID)."
+            echo "   Purge https://lingcode.dev/cliv2-latest.json manually, or upgrade checks lag ~4h."
+          fi
+
+      - name: Reminder — bump the installer version pin
+        if: ${{ inputs.deploy_to_website }}
+        run: |
+          echo "::notice::Zips are live. Now bump LINGCODE_TS_VERSION to '${{ inputs.version }}' in the website repo's install-cli.sh + install-cli.ps1 (and re-deploy + Cloudflare-purge those two files) so fresh installs pick up the new build."

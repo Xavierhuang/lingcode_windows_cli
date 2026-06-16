@@ -21,6 +21,7 @@ import {
   sanitizedProcessEnv,
 } from "@lingcode-ai/core/util/lingcode-process"
 import { validateSession } from "./validate-session"
+import { requireLoginOrExit } from "@/cli/auth-guard"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
@@ -113,6 +114,10 @@ export const TuiThreadCommand = cmd({
         describe: "agent to use",
       }),
   handler: async (args) => {
+    // Require a usable credential before booting the TUI; otherwise the session
+    // would just fail on the first prompt. Prints a sign-in message and exits.
+    requireLoginOrExit()
+
     // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
     // (Important when running under `bun run` wrappers on Windows.)
     const unguard = win32InstallCtrlCGuard()
