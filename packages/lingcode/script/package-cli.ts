@@ -68,8 +68,22 @@ for (const name of targets) {
 }
 
 // Upgrade manifest consumed by Installation.latest() (lingcode.dev/cliv2-latest.json).
-await Bun.write(path.join(outDir, "cliv2-latest.json"), JSON.stringify({ version: plain }, null, 2) + "\n")
-console.log(`wrote cliv2-latest.json (version ${plain})`)
+// Match the live manifest shape: version keeps the leading `v`, plus channel /
+// released_at / _comment. The CLI only requires `version`, but matching avoids
+// downgrading the richer manifest already deployed.
+void plain
+const channel = /-rc\d*/i.test(vtag) ? "rc" : /-beta/i.test(vtag) ? "beta" : "latest"
+const manifest = {
+  version: vtag,
+  channel,
+  released_at: new Date().toISOString(),
+  _comment:
+    "Source of truth for `lingcode upgrade` (CLIv2 curl/PowerShell installs). Bump this in lockstep with the " +
+    "install-cli.* scripts whenever a new rcN or stable release goes live. The CLI derives artifact URLs from this " +
+    "version: https://lingcode.dev/lingcode-{os}-{arch}-{version}.{zip|tar.gz}.",
+}
+await Bun.write(path.join(outDir, "cliv2-latest.json"), JSON.stringify(manifest, null, 2) + "\n")
+console.log(`wrote cliv2-latest.json (version ${vtag}, channel ${channel})`)
 
 console.log(`\n${targets.length} archives + manifest in ${path.relative(dir, outDir)}/:`)
 for (const f of fs.readdirSync(outDir).sort()) console.log("  " + f)
