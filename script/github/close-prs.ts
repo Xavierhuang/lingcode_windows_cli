@@ -2,7 +2,7 @@
 
 import { parseArgs } from "util"
 
-const defaultRepo = "Xavierhuang/LingCode"
+const defaultRepo = process.env.GITHUB_REPOSITORY || "Xavierhuang/lingcode_windows_cli"
 const defaultAgeMonths = 1
 const defaultThreshold = 2
 const defaultSleepMs = 20_000

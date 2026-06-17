@@ -115,7 +115,12 @@ export type Provider = Schema.Schema.Type<typeof Provider>
 const LINGMODEL_PROVIDER: Provider = {
   id: "lingmodel",
   name: "LingModel",
-  api: "https://lingcode.dev/api/inference",
+  // The proxy speaks the Anthropic Messages wire format at
+  // /api/inference/anthropic/v1/messages. The Anthropic SDK appends "/messages"
+  // to this baseURL, so it must include the /anthropic/v1 segment. Auth is
+  // Authorization: Bearer (injected by the lingmodel provider loader, since the
+  // proxy ignores the SDK's default x-api-key header).
+  api: "https://lingcode.dev/api/inference/anthropic/v1",
   npm: "@ai-sdk/anthropic",
   env: ["LINGCODE_CLI_TOKEN"],
   // Abstract tier names. The proxy resolves these server-side to whichever

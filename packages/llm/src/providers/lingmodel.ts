@@ -24,7 +24,7 @@ export const id = ProviderID.make("lingmodel")
 
 export const routes = [AnthropicMessages.route]
 
-const DEFAULT_BASE_URL = "https://lingcode.dev/api/inference"
+const DEFAULT_BASE_URL = "https://lingcode.dev/api/inference/anthropic/v1"
 
 export const model = (
   id: string | ModelID,

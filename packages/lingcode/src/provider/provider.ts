@@ -157,6 +157,27 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
           },
         },
       }),
+    lingmodel: Effect.fnUntraced(function* (input: Info) {
+      // LingModel routes through the Anthropic SDK, but the lingcode.dev proxy
+      // authenticates with `Authorization: Bearer <token>` and ignores the
+      // x-api-key header the SDK sends by default. Inject Bearer via a custom
+      // fetch (and drop x-api-key) so requests authenticate. The baseURL/path
+      // come from the provider `api` field (.../api/inference/anthropic/v1).
+      const auth = yield* dep.auth(input.id)
+      const key = auth && auth.type === "api" ? auth.key : undefined
+      if (!key) return { autoload: false, options: {} }
+      return {
+        autoload: false,
+        options: {
+          fetch: async (url: RequestInfo | URL, init?: RequestInit) => {
+            const headers = new Headers(init?.headers)
+            headers.set("Authorization", `Bearer ${key}`)
+            headers.delete("x-api-key")
+            return fetch(url, { ...init, headers })
+          },
+        },
+      }
+    }),
     opencode: Effect.fnUntraced(function* (input: Info) {
       const env = yield* dep.env()
       const hasKey = iife(() => {

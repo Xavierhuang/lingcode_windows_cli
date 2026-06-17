@@ -1,6 +1,9 @@
 #!/usr/bin/env bun
 
-const repo = "Xavierhuang/LingCode"
+// Use the repo the workflow runs in (GitHub Actions sets GITHUB_REPOSITORY to
+// "owner/repo"); fall back to the canonical name for local runs. The previous
+// hardcoded "Xavierhuang/LingCode" 404'd — the CLI repo is lingcode_windows_cli.
+const repo = process.env.GITHUB_REPOSITORY || "Xavierhuang/lingcode_windows_cli"
 const days = 60
 const msg = `To stay organized issues are automatically closed after ${days} days of no activity. If the issue is still relevant please open a new one.`
 
