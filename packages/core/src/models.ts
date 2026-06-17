@@ -129,43 +129,16 @@ const LINGMODEL_PROVIDER: Provider = {
   // the client). Match the Mac CLI's tier names exactly so users see the
   // same options on both platforms. `lingmodel-fast` is a legacy alias of
   // `lingmodel-standard`; ship both so existing config files keep working.
+  // Single model: all LingModel requests resolve server-side to the same
+  // upstream (currently kimi-k2.7-code, a thinking model), so the CLI exposes
+  // one id. The former pro/advanced/fast tiers were identical and were removed.
   models: {
     "lingmodel-standard": {
       id: "lingmodel-standard",
-      name: "LingModel Standard",
+      name: "LingModel",
       release_date: "2026-05-17",
       attachment: true,
-      reasoning: false,
-      temperature: true,
-      tool_call: true,
-      limit: { context: 128000, output: 8192 },
-    },
-    "lingmodel-pro": {
-      id: "lingmodel-pro",
-      name: "LingModel Pro",
-      release_date: "2026-05-17",
-      attachment: true,
-      reasoning: false,
-      temperature: true,
-      tool_call: true,
-      limit: { context: 128000, output: 8192 },
-    },
-    "lingmodel-advanced": {
-      id: "lingmodel-advanced",
-      name: "LingModel Advanced",
-      release_date: "2026-05-17",
-      attachment: true,
-      reasoning: false,
-      temperature: true,
-      tool_call: true,
-      limit: { context: 200000, output: 8192 },
-    },
-    "lingmodel-fast": {
-      id: "lingmodel-fast",
-      name: "LingModel Fast (legacy alias of standard)",
-      release_date: "2026-05-17",
-      attachment: true,
-      reasoning: false,
+      reasoning: true,
       temperature: true,
       tool_call: true,
       limit: { context: 128000, output: 8192 },

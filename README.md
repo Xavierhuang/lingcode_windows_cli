@@ -82,8 +82,9 @@ lingcode providers login    # pick "LingModel" from the list
 lingcode run --provider lingmodel --model lingmodel-standard "ping"
 ```
 
-Available LingModel tiers: `lingmodel-standard` (default), `lingmodel-pro`,
-`lingmodel-advanced`, `lingmodel-fast` (legacy alias of standard).
+LingModel exposes a single model: `lingmodel-standard`. (All requests resolve
+to the managed upstream server-side — the former pro/advanced/fast tiers were
+identical and have been consolidated.)
 
 ## Build (developer)
 
