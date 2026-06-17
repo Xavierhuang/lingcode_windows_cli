@@ -118,6 +118,23 @@ export const TuiThreadCommand = cmd({
     // would just fail on the first prompt. Prints a sign-in message and exits.
     requireLoginOrExit()
 
+    // On Windows the full-screen TUI (opentui) crashes on Bun-for-Windows, so
+    // bare `lingcode` would hang. Instead launch the working readline chat REPL
+    // by delegating to `lingcode run` (no message → starts an empty REPL).
+    if (process.platform === "win32") {
+      const fwd = ["run"]
+      if (args.prompt) fwd.push(String(args.prompt))
+      if (args.model) fwd.push("--model", String(args.model))
+      if (args.agent) fwd.push("--agent", String(args.agent))
+      if (args.continue) fwd.push("--continue")
+      if (args.session) fwd.push("--session", String(args.session))
+      if (args.fork) fwd.push("--fork")
+      if (args.project) fwd.push("--dir", String(args.project))
+      const { spawnSync } = await import("node:child_process")
+      const res = spawnSync(process.execPath, fwd, { stdio: "inherit" })
+      process.exit(res.status ?? 0)
+    }
+
     // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
     // (Important when running under `bun run` wrappers on Windows.)
     const unguard = win32InstallCtrlCGuard()

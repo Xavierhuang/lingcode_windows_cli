@@ -353,7 +353,18 @@ export const RunCommand = effectCmd({
       message = resolveRunInput(message, piped) ?? ""
       const initialInput = resolveRunInput(rawMessage, piped)
 
-      if (message.trim().length === 0 && !args.command && !args.interactive) {
+      // On Windows the full-screen TUI can't run (opentui crash), so `lingcode`
+      // / `lingcode run` with no message starts the readline chat REPL directly
+      // instead of erroring — type your first prompt at the `>` line.
+      const startReplOnly =
+        message.trim().length === 0 &&
+        !args.command &&
+        !args.interactive &&
+        process.platform === "win32" &&
+        Boolean(process.stdout.isTTY && process.stdin.isTTY) &&
+        args.format !== "json"
+
+      if (message.trim().length === 0 && !args.command && !args.interactive && !startReplOnly) {
         UI.error("You must provide a message or a command")
         process.exit(1)
       }
@@ -762,40 +773,44 @@ export const RunCommand = effectCmd({
         await share(client, sessionID)
 
         if (!args.interactive) {
-          const events = await client.event.subscribe()
-          loop(client, events).catch((e) => {
-            console.error(e)
-            process.exit(1)
-          })
+          // Bare REPL start (no message, Windows): skip the one-shot request and
+          // drop straight into the chat loop below.
+          if (!startReplOnly) {
+            const events = await client.event.subscribe()
+            loop(client, events).catch((e) => {
+              console.error(e)
+              process.exit(1)
+            })
 
-          if (args.command) {
-            const result = await client.session.command({
+            if (args.command) {
+              const result = await client.session.command({
+                sessionID,
+                agent,
+                model: args.model,
+                command: args.command,
+                arguments: message,
+                variant: args.variant,
+              })
+              if (result.error) {
+                if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+                process.exitCode = 1
+              }
+              return
+            }
+
+            const model = pick(args.model)
+            const result = await client.session.prompt({
               sessionID,
               agent,
-              model: args.model,
-              command: args.command,
-              arguments: message,
+              model,
               variant: args.variant,
+              parts: [...files, { type: "text", text: message }],
             })
             if (result.error) {
               if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
               process.exitCode = 1
+              return
             }
-            return
-          }
-
-          const model = pick(args.model)
-          const result = await client.session.prompt({
-            sessionID,
-            agent,
-            model,
-            variant: args.variant,
-            parts: [...files, { type: "text", text: message }],
-          })
-          if (result.error) {
-            if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
-            process.exitCode = 1
-            return
           }
 
           // After the one-shot completes successfully, drop into interactive

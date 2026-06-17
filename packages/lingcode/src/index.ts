@@ -254,6 +254,19 @@ try {
   }
   process.exitCode = 1
 } finally {
+  // Flush stdout/stderr before the hard exit. process.exit() can truncate
+  // buffered output on a pipe/file (notably on Windows), which dropped
+  // `lingcode run` output whenever stdout wasn't a TTY (pipes, redirects, CI).
+  // Bounded so a stuck stream can never hang the exit.
+  const drain = (stream: NodeJS.WriteStream) =>
+    new Promise<void>((resolve) => {
+      if (((stream as unknown as { writableLength?: number }).writableLength ?? 0) === 0) return resolve()
+      stream.write("", () => resolve())
+    })
+  await Promise.race([
+    Promise.all([drain(process.stdout), drain(process.stderr)]),
+    new Promise<void>((resolve) => setTimeout(resolve, 1500).unref?.()),
+  ])
   // Some subprocesses don't react properly to SIGTERM and similar signals.
   // Most notably, some docker-container-based MCP servers don't handle such signals unless
   // run using `docker run --init`.
