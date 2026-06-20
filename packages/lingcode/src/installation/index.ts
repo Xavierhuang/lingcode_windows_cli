@@ -186,7 +186,12 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
           const arch =
             process.arch === "arm64" ? "arm64" : baseline ? "x64-baseline" : "x64"
           const version = target.startsWith("v") ? target : `v${target}`
-          const url = `https://lingcode.dev/lingcode-windows-${arch}-${version}.zip`
+          // Linux/Windows binaries are served from GitHub Releases (versioned
+          // asset under the release tag); macOS still uses the lingcode.dev Swift
+          // tarball. Override with LINGCODE_TARBALL_URL for a custom mirror.
+          const url =
+            process.env["LINGCODE_TARBALL_URL"] ??
+            `https://github.com/Xavierhuang/lingcode_windows_cli/releases/download/${version}/lingcode-windows-${arch}-${version}.zip`
 
           const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } })
           if (!res.ok) {
@@ -388,9 +393,9 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         if (manifest) return manifest.version.replace(/^v/, "")
 
         const response = yield* httpOk.execute(
-          HttpClientRequest.get("https://api.github.com/repos/Xavierhuang/LingCode/releases/latest").pipe(
-            HttpClientRequest.acceptJson,
-          ),
+          HttpClientRequest.get(
+            "https://api.github.com/repos/Xavierhuang/lingcode_windows_cli/releases/latest",
+          ).pipe(HttpClientRequest.acceptJson),
         )
         const data = yield* HttpClientResponse.schemaBodyJson(GitHubRelease)(response)
         return data.tag_name.replace(/^v/, "")

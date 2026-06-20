@@ -52,8 +52,16 @@ if (targets.length === 0) {
 }
 
 const outDir = path.join(distDir, "release")
+// Version-LESS copies (Linux/Windows only) live in release/latest/. They get
+// uploaded to the GitHub Release so `releases/latest/download/lingcode-<target>.zip`
+// resolves to the newest build — letting install-cli.* + `lingcode upgrade` fetch
+// from GitHub with no version pin and no server hosting. They are NOT rsynced to
+// the droplet (the workflow excludes latest/) so its small disk only carries the
+// versioned fallback set.
+const latestDir = path.join(outDir, "latest")
 await $`rm -rf ${outDir}`
 await $`mkdir -p ${outDir}`
+await $`mkdir -p ${latestDir}`
 
 for (const name of targets) {
   const binary = path.join(distDir, name, "bin", name.startsWith("lingcode-windows") ? "lingcode.exe" : "lingcode")
@@ -65,6 +73,13 @@ for (const name of targets) {
   // zip from dist/ so the archive's top-level entry is `lingcode-<target>/...`.
   await $`zip -r -q ${zipPath} ${name}`.cwd(distDir)
   console.log(`packaged ${path.basename(zipPath)}`)
+
+  // macOS installs the Swift tarball from lingcode.dev, so only Linux/Windows
+  // need a `releases/latest` alias.
+  if (name.startsWith("lingcode-linux") || name.startsWith("lingcode-windows")) {
+    await $`cp ${zipPath} ${path.join(latestDir, `${name}.zip`)}`
+    console.log(`  + latest/${name}.zip`)
+  }
 }
 
 // Upgrade manifest consumed by Installation.latest() (lingcode.dev/cliv2-latest.json).

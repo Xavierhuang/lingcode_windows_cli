@@ -76,6 +76,7 @@ jobs:
             || echo "release $TAG already exists, uploading assets"
           gh release upload "$TAG" \
             packages/lingcode/dist/release/*.zip \
+            packages/lingcode/dist/release/latest/*.zip \
             packages/lingcode/dist/release/cliv2-latest.json \
             --clobber --repo "$GITHUB_REPOSITORY"
 
@@ -119,7 +120,9 @@ jobs:
           SSH_CMD="ssh -i $KEY_FILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 
           echo "rsync release/ -> $DEPLOY_USER@$DEPLOY_HOST:/var/www/html/"
-          rsync -avz -e "$SSH_CMD" \
+          # Exclude latest/ — those version-less aliases live on GitHub only; the
+          # droplet's small disk just carries the versioned fallback set.
+          rsync -avz --exclude='latest/' -e "$SSH_CMD" \
             packages/lingcode/dist/release/ \
             "$DEPLOY_USER@$DEPLOY_HOST:/var/www/html/"
 
