@@ -123,6 +123,27 @@ jobs:
             packages/lingcode/dist/release/ \
             "$DEPLOY_USER@$DEPLOY_HOST:/var/www/html/"
 
+          # --- Flip the installer pins on the server + prune old zips -----------
+          # install-cli.sh / install-cli.ps1 live in the website repo, not here,
+          # so the rsync above doesn't touch them — bump them in place so fresh
+          # `curl | sh` / `iwr | iex` installs resolve the new version (the only
+          # concrete vX.Y.Z(-rcN) string in either file is the pin, so a global
+          # sed is safe). cliv2-latest.json was already refreshed by the rsync.
+          # Then drop superseded versioned zips so the small droplet disk doesn't
+          # fill. NOTE: this makes the server authoritative for the pin — keep the
+          # website repo's install-cli.* in sync, or a later deploy.sh regresses it.
+          V="${{ inputs.version }}"
+          case "$V" in v*) ;; *) V="v$V" ;; esac
+          echo "bumping server install-cli.{sh,ps1} -> $V and pruning old zips"
+          $SSH_CMD "$DEPLOY_USER@$DEPLOY_HOST" bash -s "$V" <<'REMOTE'
+          set -e
+          V="$1"
+          cd /var/www/html
+          sed -i -E "s/v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?/$V/g" install-cli.sh install-cli.ps1
+          for f in lingcode-*.zip; do case "$f" in *-"$V".zip) ;; *) rm -f "$f" ;; esac; done
+          echo "  server pin: $(grep -m1 LINGCODE_TS_VERSION install-cli.sh)"
+          REMOTE
+
           # Purge the fixed-name upgrade manifest (versioned zips don't need it).
           if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
             echo "Purging Cloudflare cache for cliv2-latest.json..."
@@ -139,7 +160,21 @@ jobs:
             echo "   Purge https://lingcode.dev/cliv2-latest.json manually, or upgrade checks lag ~4h."
           fi
 
-      - name: Reminder — bump the installer version pin
+      - name: Verify the download chain is live
         if: ${{ inputs.deploy_to_website }}
         run: |
-          echo "::notice::Zips are live. Now bump LINGCODE_TS_VERSION to '${{ inputs.version }}' in the website repo's install-cli.sh + install-cli.ps1 (and re-deploy + Cloudflare-purge those two files) so fresh installs pick up the new build."
+          set -uo pipefail
+          V="${{ inputs.version }}"
+          case "$V" in v*) ;; *) V="v$V" ;; esac
+          # install-cli.sh / cliv2-latest.json are Cloudflare-DYNAMIC, so the pin
+          # bump is live immediately. Confirm the script pin AND that the binary
+          # it now resolves to actually downloads.
+          PIN="$(curl -fsS "https://lingcode.dev/install-cli.sh" | grep -m1 -oE 'v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?')"
+          ZIP="$(curl -s -o /dev/null -w '%{http_code}' "https://lingcode.dev/lingcode-linux-x64-$V.zip")"
+          echo "install-cli.sh pin: $PIN ; linux-x64 zip: HTTP $ZIP"
+          if [ "$PIN" = "$V" ] && [ "$ZIP" = "200" ]; then
+            echo "::notice::Download chain live at $V (install-cli.sh + binaries)."
+          else
+            echo "::error::Verification failed — expected install-cli.sh=$V and zip HTTP 200, got pin=$PIN zip=$ZIP."
+            exit 1
+          fi
