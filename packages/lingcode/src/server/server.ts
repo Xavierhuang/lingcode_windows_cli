@@ -9,6 +9,7 @@ import { createServer } from "node:http"
 import { MDNS } from "./mdns"
 import { HttpApiApp } from "./routes/instance/httpapi/server"
 import { disposeMiddleware } from "./routes/instance/httpapi/lifecycle"
+import { concurrencyMiddleware } from "./routes/instance/httpapi/concurrency"
 import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
 import { PublicApi } from "./routes/instance/httpapi/public"
 import type { CorsOptions } from "./cors"
@@ -102,7 +103,9 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
 
 function listenerLayer(opts: ListenOptions, port: number) {
   return HttpRouter.serve(HttpApiApp.createRoutes(opts), {
-    middleware: disposeMiddleware,
+    // Concurrency limiter is outermost so over-limit requests are rejected with
+    // 429 before any per-instance setup/disposal work runs.
+    middleware: (effect) => concurrencyMiddleware(disposeMiddleware(effect)),
     disableLogger: true,
     disableListenLog: true,
   }).pipe(

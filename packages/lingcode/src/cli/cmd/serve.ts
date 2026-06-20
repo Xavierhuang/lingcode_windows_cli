@@ -17,6 +17,10 @@ export const ServeCommand = effectCmd({
       .option("workspace-root", {
         type: "string",
         describe: "sandbox every request's working directory to this root; paths outside it are clamped back in",
+      })
+      .option("max-concurrent", {
+        type: "number",
+        describe: "reject with HTTP 429 once this many requests are in flight (0 or unset = unlimited)",
       }),
   describe: "starts a headless lingcode server",
   // Server loads instances per-request via x-opencode-directory header — no
@@ -28,6 +32,9 @@ export const ServeCommand = effectCmd({
     if (args.password) process.env["OPENCODE_SERVER_PASSWORD"] = args.password
     if (args["workspace-root"]) {
       process.env["LINGCODE_WORKSPACE_ROOT"] = path.resolve(args["workspace-root"])
+    }
+    if (args["max-concurrent"] !== undefined) {
+      process.env["LINGCODE_MAX_CONCURRENT"] = String(args["max-concurrent"])
     }
 
     // Require a usable credential before starting; the server can't serve model
@@ -41,6 +48,9 @@ export const ServeCommand = effectCmd({
     console.log(`lingcode server listening on http://${server.hostname}:${server.port}`)
     if (Flag.LINGCODE_WORKSPACE_ROOT) {
       console.log(`workspace sandboxed to ${Flag.LINGCODE_WORKSPACE_ROOT}`)
+    }
+    if (Flag.LINGCODE_MAX_CONCURRENT > 0) {
+      console.log(`max concurrent requests: ${Flag.LINGCODE_MAX_CONCURRENT} (429 over limit)`)
     }
 
     yield* Effect.never

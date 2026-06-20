@@ -71,4 +71,13 @@ export const Flag = {
   get LINGCODE_WORKSPACE_ROOT() {
     return process.env["LINGCODE_WORKSPACE_ROOT"]
   },
+  // Max in-flight HTTP requests the headless server serves before replying 429
+  // (the `serve --max-concurrent` flag sets it). Evaluated at access time
+  // because the CLI sets it at runtime before listening. 0 / unset / invalid =
+  // unlimited.
+  get LINGCODE_MAX_CONCURRENT() {
+    const raw = process.env["LINGCODE_MAX_CONCURRENT"]
+    const n = raw ? Number.parseInt(raw, 10) : 0
+    return Number.isFinite(n) && n > 0 ? n : 0
+  },
 }
