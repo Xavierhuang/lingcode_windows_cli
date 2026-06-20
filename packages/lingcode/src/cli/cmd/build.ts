@@ -11,7 +11,9 @@ type Args = {
   dir?: string
   package?: string
   platform: string
+  implement: boolean
   build: boolean
+  "max-iterations": number
 }
 
 // --- toolchain doctor -------------------------------------------------------
@@ -46,10 +48,7 @@ function detectAndroidSdk(): { ok: boolean; detail: string } {
   ].filter(Boolean) as string[]
   const found = candidates.find((p) => fs.existsSync(p))
   if (found) return { ok: true, detail: found }
-  return {
-    ok: false,
-    detail: "no Android SDK (install Android Studio or cmdline-tools, then set ANDROID_HOME)",
-  }
+  return { ok: false, detail: "no Android SDK (install Android Studio or cmdline-tools, then set ANDROID_HOME)" }
 }
 
 function detectGradle(): { ok: boolean; detail: string } {
@@ -62,16 +61,59 @@ function detectGradle(): { ok: boolean; detail: string } {
   return { ok: false, detail: "no system Gradle (needed once to generate the ./gradlew wrapper)" }
 }
 
+// --- agent loop -------------------------------------------------------------
+// Re-invoke this same CLI's `run` to drive the model over the scaffold. In the
+// compiled binary process.execPath IS lingcode; under `bun src/index.ts` (dev)
+// argv[1] is the entry script, so we forward it.
+function selfRun(promptArgs: string[]): number {
+  const entry = process.argv[1]
+  const isDev = !!entry && /\.(ts|js|mjs)$/.test(entry)
+  const argv = isDev ? [entry, ...promptArgs] : [...promptArgs]
+  const r = spawnSync(process.execPath, argv, { stdio: "inherit" })
+  return r.status ?? 1
+}
+
+function implementPrompt(description: string, pkgPath: string): string {
+  return [
+    "You are implementing an Android app in the current project directory.",
+    "",
+    `App to build: "${description}"`,
+    "",
+    "A minimal Jetpack Compose app (Kotlin, AGP 8.7, compileSdk 35) is already scaffolded:",
+    `  app/src/main/java/${pkgPath}/MainActivity.kt  — entry point`,
+    "  app/build.gradle.kts                          — module config + dependencies",
+    "  app/src/main/AndroidManifest.xml",
+    "",
+    "Implement the described app: idiomatic Kotlin + Jetpack Compose (Material3),",
+    "add screens/state/components as needed, add any deps to app/build.gradle.kts,",
+    "keep it a single module and buildable with `gradlew assembleDebug` (minSdk 24).",
+    "Edit the files directly; do not explain — just implement.",
+  ].join("\n")
+}
+
+// Run `gradle wrapper` once, then `gradlew assembleDebug`. Returns the captured
+// output so failures can be fed back to the model.
+function gradleBuild(dir: string): { ok: boolean; output: string } {
+  spawnSync("gradle", ["wrapper"], { cwd: dir, encoding: "utf8", shell: true })
+  const gw = process.platform === "win32" ? "gradlew.bat" : "./gradlew"
+  const r = spawnSync(gw, ["assembleDebug"], { cwd: dir, encoding: "utf8", shell: true })
+  const output = (r.stdout ?? "") + (r.stderr ?? "")
+  const apk = path.join(dir, "app", "build", "outputs", "apk", "debug", "app-debug.apk")
+  return { ok: fs.existsSync(apk), output }
+}
+
 export const BuildCommand: CommandModule<object, Args> = {
   command: "build [name]",
-  describe: "scaffold and build an app from a prompt (experimental; Android-first)",
+  describe: "scaffold, implement, and build an app from a prompt (experimental; Android-first)",
   builder: (yargs) =>
     yargs
       .positional("name", { type: "string", describe: "app name / one-line description" })
       .option("dir", { type: "string", describe: "target directory (default ./<name>)" })
       .option("package", { type: "string", describe: "Android applicationId (default dev.lingcode.<name>)" })
       .option("platform", { type: "string", default: "android", describe: "target platform (android)" })
-      .option("build", { type: "boolean", default: true, describe: "run the Gradle build after scaffolding" }) as any,
+      .option("implement", { type: "boolean", default: true, describe: "drive the model to implement the app" })
+      .option("build", { type: "boolean", default: true, describe: "run the Gradle build (and fix-up loop)" })
+      .option("max-iterations", { type: "number", default: 3, describe: "build/fix attempts" }) as any,
   handler: async (args) => {
     if (!Flag.LINGCODE_EXPERIMENTAL_BUILD) {
       console.error(
@@ -92,11 +134,11 @@ export const BuildCommand: CommandModule<object, Args> = {
     const appName = rawName || "MyApp"
     const dir = path.resolve(args.dir ?? slug)
     const pkg = args.package ?? `dev.lingcode.${slug}`
+    const pkgPath = pkg.replace(/\./g, "/")
 
     console.log(`▶ lingcode build (android)`)
-    console.log(`  app:     ${appName}`)
-    console.log(`  package: ${pkg}`)
-    console.log(`  dir:     ${dir}`)
+    console.log(`  app: ${appName}   package: ${pkg}`)
+    console.log(`  dir: ${dir}`)
 
     // 1. Doctor
     console.log("\n▶ toolchain")
@@ -110,29 +152,45 @@ export const BuildCommand: CommandModule<object, Args> = {
     ] as const) {
       console.log(`  ${r.ok ? "✓" : "✗"} ${label.padEnd(12)} ${r.detail}`)
     }
+    const ready = jdk.ok && sdk.ok && gradle.ok
 
-    // 2. Scaffold (always — a missing toolchain doesn't stop us writing the project)
+    // 2. Scaffold
     console.log("\n▶ scaffolding")
     const written = await scaffoldAndroid({ dir, appName, pkg })
     for (const f of written) console.log(`  + ${f}`)
 
-    // 3. Build (only if the toolchain is present and --build)
-    const ready = jdk.ok && sdk.ok && gradle.ok
-    if (args.build && ready) {
-      console.log("\n▶ building (gradle wrapper + assembleDebug)")
-      const wrap = spawnSync("gradle", ["wrapper"], { cwd: dir, stdio: "inherit", shell: true })
-      if (wrap.status === 0) {
-        const gw = process.platform === "win32" ? "gradlew.bat" : "./gradlew"
-        spawnSync(gw, ["assembleDebug"], { cwd: dir, stdio: "inherit", shell: true })
+    // 3. Implement (agent) — then build, feeding any Gradle errors back to iterate.
+    if (args.implement) {
+      console.log("\n▶ implementing (lingcode run)")
+      process.chdir(dir)
+      const code = selfRun(["run", implementPrompt(rawName, pkgPath), "--dangerously-skip-permissions"])
+      if (code !== 0) console.log("  (implementation step exited non-zero — sign in / pick a model and retry)")
+
+      if (args.build && ready) {
+        let built = false
+        for (let i = 1; i <= Math.max(1, args["max-iterations"]); i++) {
+          console.log(`\n▶ building (attempt ${i}/${args["max-iterations"]})`)
+          const res = gradleBuild(dir)
+          if (res.ok) {
+            built = true
+            console.log(`✓ APK: ${path.join(dir, "app/build/outputs/apk/debug/app-debug.apk")}`)
+            break
+          }
+          if (i < args["max-iterations"]) {
+            console.log("  build failed — feeding errors back to the model")
+            const tail = res.output.split(/\r?\n/).slice(-60).join("\n")
+            selfRun(["run", `The Gradle build failed:\n\n${tail}\n\nFix these errors in the project.`, "--dangerously-skip-permissions"])
+          }
+        }
+        if (!built) console.log("⚠ could not produce an APK within the iteration budget — see Gradle output above.")
       }
-      const apk = path.join(dir, "app", "build", "outputs", "apk", "debug", "app-debug.apk")
-      console.log(fs.existsSync(apk) ? `\n✓ APK: ${apk}` : "\n⚠ build did not produce an APK — see the Gradle output above.")
-    } else if (args.build) {
-      console.log("\n⚠ skipping the build — install the missing toolchain above, then run:")
+    }
+
+    if (!ready && args.build) {
+      console.log("\n⚠ build skipped — install the missing toolchain above, then:")
       console.log(`    cd ${dir} && gradle wrapper && ${process.platform === "win32" ? "gradlew.bat" : "./gradlew"} assembleDebug`)
     }
 
-    console.log(`\n✓ scaffolded ${appName} at ${dir}`)
-    console.log("  (agent-driven implementation from your prompt lands in the next checkpoint.)")
+    console.log(`\n✓ ${appName} at ${dir}`)
   },
 }
