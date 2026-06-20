@@ -68,7 +68,10 @@ function credentialFromRequest(request: HttpServerRequest.HttpServerRequest) {
 function credentialFromURL(url: URL, request: HttpServerRequest.HttpServerRequest) {
   const token = url.searchParams.get(AUTH_TOKEN_QUERY)
   if (token) return decodeCredential(token)
-  const match = /^Basic\s+(.+)$/i.exec(request.headers.authorization ?? "")
+  // Accept both `Basic` and `Bearer` — in either case the value is the
+  // base64 `username:password` shared secret. Bearer is what IDE/HTTP clients
+  // that model the server as a token-gated endpoint tend to send.
+  const match = /^(?:Basic|Bearer)\s+(.+)$/i.exec(request.headers.authorization ?? "")
   if (match) return decodeCredential(match[1])
   return Effect.succeed(emptyCredential())
 }

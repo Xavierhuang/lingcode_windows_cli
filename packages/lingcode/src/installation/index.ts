@@ -143,13 +143,18 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
     })
 
     const upgradeCurl = Effect.fnUntraced(function* (target: string) {
-      const response = yield* httpOk.execute(HttpClientRequest.get("https://lingcode.dev/install"))
+      // The live installer is install-cli.sh (the bare /install path 404s).
+      // It pins the version via LINGCODE_TS_VERSION (with a leading "v"),
+      // NOT the upstream-opencode "VERSION" env var, and builds the zip URL
+      // as lingcode-<os>-<arch>-<version>.zip from it.
+      const response = yield* httpOk.execute(HttpClientRequest.get("https://lingcode.dev/install-cli.sh"))
       const body = yield* response.text
       const bodyBytes = new TextEncoder().encode(body)
+      const version = target.startsWith("v") ? target : `v${target}`
       const result = yield* appProcess.run(
         ChildProcess.make("bash", [], {
           stdin: Stream.make(bodyBytes),
-          env: { VERSION: target },
+          env: { LINGCODE_TS_VERSION: version },
           extendEnv: true,
         }),
       )

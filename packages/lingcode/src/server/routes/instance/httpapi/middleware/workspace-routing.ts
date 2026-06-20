@@ -8,6 +8,7 @@ import * as Fence from "@/server/shared/fence"
 import { getWorkspaceRouteSessionID, isLocalWorkspaceRoute, workspaceProxyURL } from "@/server/shared/workspace-routing"
 import { NotFoundError } from "@/storage/storage"
 import { Flag } from "@lingcode-ai/core/flag/flag"
+import path from "path"
 import { Context, Data, Effect, Layer, Schema } from "effect"
 import { HttpClient, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
@@ -68,8 +69,25 @@ function selectedWorkspaceID(url: URL, sessionWorkspaceID?: WorkspaceID): Worksp
   return sessionWorkspaceID ?? (workspaceParam ? WorkspaceID.make(workspaceParam) : undefined)
 }
 
+// When `serve --workspace-root` (LINGCODE_WORKSPACE_ROOT) is set, sandbox every
+// per-request directory to that root: anything resolving outside it is clamped
+// back to the root rather than honored, so a client cannot read/write arbitrary
+// paths on the host via the `directory` param or x-opencode-directory header.
+function clampToWorkspaceRoot(dir: string): string {
+  const root = Flag.LINGCODE_WORKSPACE_ROOT
+  if (!root) return dir
+  const resolvedRoot = path.resolve(root)
+  const resolved = path.resolve(dir)
+  if (resolved === resolvedRoot) return resolvedRoot
+  const rel = path.relative(resolvedRoot, resolved)
+  const inside = rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel)
+  return inside ? resolved : resolvedRoot
+}
+
 function defaultDirectory(request: HttpServerRequest.HttpServerRequest, url: URL): string {
-  return url.searchParams.get("directory") || request.headers["x-opencode-directory"] || process.cwd()
+  return clampToWorkspaceRoot(
+    url.searchParams.get("directory") || request.headers["x-opencode-directory"] || process.cwd(),
+  )
 }
 
 function shouldStayOnControlPlane(request: HttpServerRequest.HttpServerRequest, url: URL): boolean {

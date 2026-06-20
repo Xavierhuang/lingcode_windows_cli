@@ -65,4 +65,10 @@ export const Flag = {
   get OPENCODE_CLIENT() {
     return process.env["OPENCODE_CLIENT"] ?? "cli"
   },
+  // Sandboxes the headless server: every per-request working directory is
+  // clamped to this root (the `serve --workspace-root` flag sets it). Evaluated
+  // at access time because the CLI sets it at runtime before listening.
+  get LINGCODE_WORKSPACE_ROOT() {
+    return process.env["LINGCODE_WORKSPACE_ROOT"]
+  },
 }

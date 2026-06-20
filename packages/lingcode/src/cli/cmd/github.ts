@@ -18,7 +18,10 @@ import type {
 } from "@octokit/webhooks-types"
 import { UI } from "../ui"
 import { cmd } from "./cmd"
-import { effectCmd } from "../effect-cmd"
+import { effectCmd, fail, CliError } from "../effect-cmd"
+import { Auth } from "@/auth"
+import { push, type PushEvent } from "@/github/push"
+import { GithubAuth } from "@/github/auth"
 import { ModelsDev } from "@lingcode-ai/core/models"
 import { InstanceRef } from "@/effect/instance-ref"
 import { SessionShare } from "@/share/session"
@@ -183,9 +186,132 @@ export function formatPromptTooLargeError(files: { filename: string; content: st
 
 export const GithubCommand = cmd({
   command: "github",
-  describe: "manage GitHub agent",
-  builder: (yargs) => yargs.command(GithubInstallCommand).command(GithubRunCommand).demandCommand(),
+  describe: "manage GitHub (agent, push)",
+  builder: (yargs) =>
+    yargs
+      .command(GithubInstallCommand)
+      .command(GithubRunCommand)
+      .command(GithubLoginCommand)
+      .command(GithubPushCommand)
+      .demandCommand(),
   async handler() {},
+})
+
+export const GithubLoginCommand = effectCmd({
+  command: "login",
+  describe: "sign in to GitHub (store a personal access token)",
+  instance: false,
+  handler: Effect.fn("Cli.github.login")(function* () {
+    const auth = yield* Auth.Service
+    const token = yield* Effect.promise(async () => {
+      UI.empty()
+      prompts.intro("Sign in to GitHub")
+      const url = "https://github.com/settings/tokens/new?scopes=repo&description=LingCode%20IDE"
+      prompts.log.info("Opening " + url)
+      const command =
+        process.platform === "darwin"
+          ? `open "${url}"`
+          : process.platform === "win32"
+            ? `start "" "${url}"`
+            : `xdg-open "${url}"`
+      exec(command, (error) => {
+        if (error) prompts.log.warn(`Could not open browser. Please visit: ${url}`)
+      })
+      const pasted = await prompts.password({ message: "Paste a GitHub personal access token (repo scope)" })
+      if (prompts.isCancel(pasted) || !String(pasted).trim()) throw new UI.CancelledError()
+      return String(pasted).trim()
+    })
+
+    const login = yield* Effect.tryPromise({
+      try: () => GithubAuth.verify(token),
+      catch: (e) =>
+        new CliError({ message: `Token verification failed: ${e instanceof Error ? e.message : String(e)}` }),
+    })
+
+    yield* auth
+      .set(GithubAuth.AUTH_KEY, new Auth.Api({ type: "api", key: token, metadata: { login } }))
+      .pipe(Effect.mapError((e) => new CliError({ message: e.message })))
+
+    yield* Effect.sync(() => prompts.outro(`Signed in as ${login}`))
+  }),
+})
+
+export const GithubPushCommand = effectCmd({
+  command: "push [dir]",
+  describe: "commit and push this project to GitHub",
+  instance: false,
+  builder: (yargs) =>
+    yargs
+      .positional("dir", { describe: "project directory", type: "string" })
+      .option("repo", { describe: "owner/repo to create when there is no remote", type: "string" })
+      .option("private", { describe: "create the new repository as private", type: "boolean" })
+      .option("message", { describe: "commit message", type: "string", alias: "m" })
+      .option("ai-message", {
+        describe: "generate the commit message from the staged diff (ignored when --message is given)",
+        type: "boolean",
+      })
+      .option("ndjson", { describe: "emit machine-readable NDJSON progress", type: "boolean" }),
+  handler: Effect.fn("Cli.github.push")(function* (args) {
+    const cwd = args.dir ?? process.cwd()
+    const token = yield* GithubAuth.resolveToken()
+
+    // NDJSON mode (driven by the desktop IDE modal): pure machine output.
+    if (args.ndjson) {
+      const emit = (e: PushEvent) => process.stdout.write(JSON.stringify(e) + "\n")
+      if (!token) {
+        emit({ phase: "error", message: "Not signed in. Run `lingcode github login` first." })
+        process.exitCode = 1
+        return
+      }
+      yield* Effect.tryPromise({
+        try: () =>
+          push(token, {
+            cwd,
+            repo: args.repo,
+            private: args.private,
+            message: args.message,
+            aiMessage: args["ai-message"],
+            emit,
+          }),
+        catch: (e) => new CliError({ message: e instanceof Error ? e.message : String(e) }),
+      }).pipe(
+        Effect.catchTag("CliError", (e) =>
+          Effect.sync(() => {
+            emit({ phase: "error", message: e.message })
+            process.exitCode = 1
+          }),
+        ),
+      )
+      return
+    }
+
+    if (!token) return yield* fail("Not signed in. Run `lingcode github login` first.")
+
+    // Human mode: plain progress on stderr, final URL on stdout.
+    UI.empty()
+    const result = yield* Effect.tryPromise({
+      try: () =>
+        push(token, {
+          cwd,
+          repo: args.repo,
+          private: args.private,
+          message: args.message,
+          aiMessage: args["ai-message"],
+          emit: (e) => {
+            if (e.phase === "detect" && e.hasRemote) process.stderr.write(`  remote ${e.owner}/${e.repo}\n`)
+            else if (e.phase === "create_repo") process.stderr.write(`  created ${e.owner}/${e.repo}\n`)
+            else if (e.phase === "commit") process.stderr.write(`  committed (${e.changed} file(s))\n`)
+            else if (e.phase === "push" && e.status === "start") process.stderr.write(`  pushing...\n`)
+          },
+        }),
+      catch: (e) => new CliError({ message: e instanceof Error ? e.message : String(e) }),
+    })
+
+    if (result.status === "need_repo") {
+      return yield* fail("No GitHub remote found. Re-run with `--repo <owner/repo>` to create one.")
+    }
+    yield* Effect.sync(() => UI.println(result.url))
+  }),
 })
 
 export const GithubInstallCommand = effectCmd({

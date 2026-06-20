@@ -15,6 +15,8 @@ import type { Hooks } from "@lingcode-ai/plugin"
 import { Process } from "@/util/process"
 import { errorMessage } from "@/util/error"
 import { text } from "node:stream/consumers"
+import crypto from "node:crypto"
+import nodefs from "node:fs/promises"
 import { Effect, Option } from "effect"
 
 type PluginAuth = NonNullable<Hooks["auth"]>
@@ -240,7 +242,14 @@ export const ProvidersCommand = cmd({
   aliases: ["auth"],
   describe: "manage AI providers and credentials",
   builder: (yargs) =>
-    yargs.command(ProvidersListCommand).command(ProvidersLoginCommand).command(ProvidersLogoutCommand).demandCommand(),
+    yargs
+      .command(ProvidersListCommand)
+      .command(ProvidersLoginCommand)
+      .command(ProvidersLogoutCommand)
+      .command(ProvidersUseCommand)
+      .command(ProvidersExportCommand)
+      .command(ProvidersImportCommand)
+      .demandCommand(),
   async handler() {},
 })
 
@@ -312,6 +321,12 @@ export const ProvidersLoginCommand = effectCmd({
       .option("method", {
         alias: ["m"],
         describe: "login method label (skips method selection)",
+        type: "string",
+      })
+      .option("account", {
+        alias: ["a"],
+        describe:
+          "store this credential under a named account label (e.g. 'work'); switch later with `providers use <provider> --account <label>`",
         type: "string",
       }),
   handler: Effect.fn("Cli.providers.login")(function* (args) {
@@ -488,7 +503,59 @@ export const ProvidersLoginCommand = effectCmd({
     const apiKey = yield* promptValue(key)
     yield* Effect.orDie(authSvc.set(provider, { type: "api", key: apiKey }))
 
+    // Multi-account: keep a labeled copy alongside the active slot so the user
+    // can park several keys for one provider and swap with `providers use`.
+    const label = args.account?.trim()
+    if (label) {
+      yield* Effect.orDie(authSvc.set(`${provider}#${label}`, { type: "api", key: apiKey }))
+      yield* Prompt.log.info(
+        `Saved as account '${label}'. Switch later with: lingcode providers use ${provider} --account ${label}`,
+      )
+    }
+
     yield* Prompt.outro("Done")
+  }),
+})
+
+export const ProvidersUseCommand = effectCmd({
+  command: "use <provider>",
+  describe: "activate a stored named account for a provider",
+  // Swaps which credential occupies the active <provider> slot; global only.
+  instance: false,
+  builder: (yargs) =>
+    yargs
+      .positional("provider", { describe: "provider id", type: "string", demandOption: true })
+      .option("account", { alias: ["a"], describe: "account label to activate", type: "string" }),
+  handler: Effect.fn("Cli.providers.use")(function* (args) {
+    const authSvc = yield* Auth.Service
+    const provider = args.provider!
+    const all = yield* Effect.orDie(authSvc.all())
+    const prefix = `${provider}#`
+    const labels = Object.keys(all)
+      .filter((k) => k.startsWith(prefix))
+      .map((k) => k.slice(prefix.length))
+
+    UI.empty()
+    yield* Prompt.intro(`Accounts for ${provider}`)
+    if (labels.length === 0) {
+      yield* Prompt.log.error(
+        `No named accounts for '${provider}'. Create one with: lingcode providers login --provider ${provider} --account <label>`,
+      )
+      return
+    }
+
+    const label = args.account?.trim() ?? (yield* promptValue(yield* Prompt.select({
+      message: "Select account to activate",
+      options: labels.map((l) => ({ label: l, value: l })),
+    })))
+
+    const stored = all[`${prefix}${label}`]
+    if (!stored) {
+      yield* Prompt.log.error(`No account '${label}' for '${provider}'. Available: ${labels.join(", ")}`)
+      return
+    }
+    yield* Effect.orDie(authSvc.set(provider, stored))
+    yield* Prompt.outro(`Activated '${label}' for ${provider}`)
   }),
 })
 
@@ -518,5 +585,108 @@ export const ProvidersLogoutCommand = effectCmd({
     })
     yield* Effect.orDie(authSvc.remove(yield* promptValue(selected)))
     yield* Prompt.outro("Logout successful")
+  }),
+})
+
+// ── encrypted export / import ───────────────────────────────────────────────
+// Portable backup of all stored credentials, encrypted with a passphrase the
+// user supplies (AES-256-GCM, scrypt-derived key). Lets a user move creds
+// between machines — the gap vs the Swift CLI's `auth export/import`.
+
+const EXPORT_MAGIC = "lingcode-auth-export"
+
+function encryptAuth(plaintext: string, passphrase: string): string {
+  const salt = crypto.randomBytes(16)
+  const iv = crypto.randomBytes(12)
+  const key = crypto.scryptSync(passphrase, salt, 32)
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv)
+  const enc = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()])
+  const tag = cipher.getAuthTag()
+  return JSON.stringify({
+    magic: EXPORT_MAGIC,
+    v: 1,
+    salt: salt.toString("base64"),
+    iv: iv.toString("base64"),
+    tag: tag.toString("base64"),
+    data: enc.toString("base64"),
+  })
+}
+
+function decryptAuth(envelope: string, passphrase: string): string {
+  const obj = JSON.parse(envelope)
+  if (obj?.magic !== EXPORT_MAGIC) throw new Error("not a lingcode auth export file")
+  const salt = Buffer.from(obj.salt, "base64")
+  const iv = Buffer.from(obj.iv, "base64")
+  const tag = Buffer.from(obj.tag, "base64")
+  const key = crypto.scryptSync(passphrase, salt, 32)
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv)
+  decipher.setAuthTag(tag)
+  return Buffer.concat([decipher.update(Buffer.from(obj.data, "base64")), decipher.final()]).toString("utf8")
+}
+
+export const ProvidersExportCommand = effectCmd({
+  command: "export <file>",
+  describe: "export all credentials to an encrypted file",
+  instance: false,
+  builder: (yargs) =>
+    yargs.positional("file", { describe: "destination path for the encrypted export", type: "string", demandOption: true }),
+  handler: Effect.fn("Cli.providers.export")(function* (args) {
+    const authSvc = yield* Auth.Service
+    const all = yield* Effect.orDie(authSvc.all())
+    UI.empty()
+    yield* Prompt.intro("Export credentials")
+    const count = Object.keys(all).length
+    if (count === 0) {
+      yield* Prompt.log.error("No credentials to export")
+      return
+    }
+    const pass = yield* promptValue(
+      yield* Prompt.password({
+        message: "Passphrase to encrypt the export",
+        validate: (x) => (x && x.length >= 6 ? undefined : "At least 6 characters"),
+      }),
+    )
+    const envelope = encryptAuth(JSON.stringify(all), pass)
+    yield* Effect.tryPromise({
+      try: () => nodefs.writeFile(args.file!, envelope, { mode: 0o600 }),
+      catch: (cause) => new CliError({ message: `Failed to write ${args.file}: ${String(cause)}` }),
+    })
+    yield* Prompt.outro(`Exported ${count} credential${count === 1 ? "" : "s"} to ${args.file}`)
+  }),
+})
+
+export const ProvidersImportCommand = effectCmd({
+  command: "import <file>",
+  describe: "import credentials from an encrypted export file",
+  instance: false,
+  builder: (yargs) =>
+    yargs.positional("file", { describe: "path to the encrypted export", type: "string", demandOption: true }),
+  handler: Effect.fn("Cli.providers.import")(function* (args) {
+    const authSvc = yield* Auth.Service
+    UI.empty()
+    yield* Prompt.intro("Import credentials")
+    const envelope = yield* Effect.tryPromise({
+      try: () => nodefs.readFile(args.file!, "utf8"),
+      catch: (cause) => new CliError({ message: `Failed to read ${args.file}: ${String(cause)}` }),
+    })
+    const pass = yield* promptValue(
+      yield* Prompt.password({
+        message: "Passphrase to decrypt the export",
+        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+      }),
+    )
+    let parsed: Record<string, Auth.Info>
+    try {
+      parsed = JSON.parse(decryptAuth(envelope, pass))
+    } catch (cause) {
+      yield* Prompt.log.error("Failed to decrypt — wrong passphrase or corrupt file")
+      return
+    }
+    let imported = 0
+    for (const [key, info] of Object.entries(parsed)) {
+      yield* Effect.orDie(authSvc.set(key, info))
+      imported++
+    }
+    yield* Prompt.outro(`Imported ${imported} credential${imported === 1 ? "" : "s"}`)
   }),
 })

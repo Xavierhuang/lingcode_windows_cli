@@ -85,8 +85,28 @@ function block(info: Inline, output?: string) {
   UI.empty()
 }
 
+// The LingModel proxy returns HTTP 402 when the caller's tier cap is exhausted.
+// Without this the SDK surfaces it as a raw "402"/JSON blob. Detect the tier
+// signal from whatever string the error carries and replace it with actionable,
+// vendor-neutral copy (branding policy: never name the upstream provider).
+function tierAwareError(raw: string): string | undefined {
+  const s = raw.toLowerCase()
+  const looksLikeTierLimit =
+    /\b402\b/.test(raw) ||
+    s.includes("payment required") ||
+    ((s.includes("quota") || s.includes("limit") || s.includes("tier") || s.includes("credit")) &&
+      (s.includes("lingmodel") || s.includes("lcat_") || s.includes("inference")))
+  if (!looksLikeTierLimit) return undefined
+  return [
+    "LingModel usage limit reached — you've hit your current plan's cap.",
+    "Check your plan or top up at https://lingcode.dev/account, then retry.",
+    "You can also switch providers with --provider, or wait for your quota to reset.",
+  ].join("\n")
+}
+
 function formatRunError(error: unknown) {
-  return FormatError(error) ?? FormatUnknownError(error)
+  const base = FormatError(error) ?? FormatUnknownError(error)
+  return tierAwareError(base) ?? base
 }
 
 async function tool(part: ToolPart) {
@@ -727,6 +747,7 @@ export const RunCommand = effectCmd({
               if ("data" in props.error && props.error.data && "message" in props.error.data) {
                 err = String(props.error.data.message)
               }
+              err = tierAwareError(`${props.error.name} ${err}`) ?? err
               error = error ? error + EOL + err : err
               if (emit("error", { error: props.error })) continue
               UI.error(err)

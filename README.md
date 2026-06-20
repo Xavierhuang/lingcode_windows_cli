@@ -110,10 +110,15 @@ The Mac Swift CLI has these and the v0.9.x Linux/Windows CLI doesn't yet:
 
 - `lingcode build "..."` — Cosine/Genie-style autonomous bootstrap
 - RTK (Rust Token Killer) — transparent bash command rewriting for token savings
-- `lingcode-memory` MCP tool — memory_save / skill_propose / session_search
-- Tier-aware pre-flight error UX (currently the proxy returns 402; CLI surfaces it as a generic error)
 - LingCode.app IPC integration — Mac-only by definition; not coming to Linux/Windows
 - App icon generator, embedded simulator, Xcode-project generator — Mac-only
+
+Recently brought to parity on Linux/Windows (see `PARITY.md`):
+
+- `lingcode-memory` tools — `memory_save` / `memory_remove` / `skill_propose` / `session_search`, file-backed (no IPC)
+- Tier-aware 402 UX — the LingModel proxy's quota 402 now surfaces actionable, vendor-neutral copy
+- Auth parity — multi-account labels (`providers login --account`, `providers use`) + encrypted `providers export`/`import`
+- Serve hardening — `Bearer` token auth, `serve --workspace-root` sandboxing, inline `serve --password`
 
 These are tracked in `STATUS.md` (`## What's still NOT wired`).
 

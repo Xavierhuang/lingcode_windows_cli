@@ -16,6 +16,7 @@ import { InstallationVersion } from "@lingcode-ai/core/installation/version"
 import { NamedError } from "@lingcode-ai/core/util/error"
 import { FormatError } from "./cli/error"
 import { ServeCommand } from "./cli/cmd/serve"
+import { RemoteCommand } from "./cli/cmd/remote"
 import { Filesystem } from "@/util/filesystem"
 import { DebugCommand } from "./cli/cmd/debug"
 import { StatsCommand } from "./cli/cmd/stats"
@@ -179,6 +180,7 @@ const cli = yargs(args)
   .command(UpgradeCommand)
   .command(UninstallCommand)
   .command(ServeCommand)
+  .command(RemoteCommand)
   .command(WebCommand)
   .command(ModelsCommand)
   .command(StatsCommand)

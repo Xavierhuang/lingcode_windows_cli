@@ -13,6 +13,7 @@ import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
+import { MemorySaveTool, MemoryRemoveTool, SkillProposeTool, SessionSearchTool } from "./lingcode-memory"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@lingcode-ai/plugin"
@@ -133,6 +134,10 @@ export const layer: Layer.Layer<
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
+    const memorySave = yield* MemorySaveTool
+    const memoryRemove = yield* MemoryRemoveTool
+    const skillPropose = yield* SkillProposeTool
+    const sessionSearch = yield* SessionSearchTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -237,6 +242,10 @@ export const layer: Layer.Layer<
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
+          memory_save: Tool.init(memorySave),
+          memory_remove: Tool.init(memoryRemove),
+          skill_propose: Tool.init(skillPropose),
+          session_search: Tool.init(sessionSearch),
         })
 
         return {
@@ -258,6 +267,10 @@ export const layer: Layer.Layer<
             ...(flags.experimentalScout ? [tool.repo_clone, tool.repo_overview] : []),
             tool.skill,
             tool.patch,
+            tool.memory_save,
+            tool.memory_remove,
+            tool.skill_propose,
+            tool.session_search,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],
