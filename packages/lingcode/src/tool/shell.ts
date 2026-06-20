@@ -17,6 +17,7 @@ import { Shell } from "@/shell/shell"
 import { ShellID } from "./shell/id"
 
 import * as Truncate from "./truncate"
+import * as RTK from "./rtk"
 import { Plugin } from "@/plugin"
 import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -572,7 +573,10 @@ export const ShellTool = Tool.define(
         file = yield* trunc.write(raw)
       }
 
-      let output = end.text
+      // RTK: compact the model-visible output (the full original is still saved
+      // to the truncation file via `raw`, so nothing is lost). No-op when
+      // LINGCODE_RTK is disabled.
+      let output = RTK.maybeCompact(end.text)
       if (!output) output = "(no output)"
 
       if (cut && file) {

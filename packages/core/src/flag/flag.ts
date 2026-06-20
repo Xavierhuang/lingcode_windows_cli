@@ -80,4 +80,13 @@ export const Flag = {
     const n = raw ? Number.parseInt(raw, 10) : 0
     return Number.isFinite(n) && n > 0 ? n : 0
   },
+  // RTK (token killer): conservatively compact verbose tool output before it
+  // reaches the model. Compiled into every platform binary, so it's on for every
+  // user by default — opt out with LINGCODE_RTK=0 / false. Access-time eval so
+  // tests and the CLI can toggle it at runtime.
+  get LINGCODE_RTK() {
+    const raw = process.env["LINGCODE_RTK"]
+    if (raw === undefined) return true
+    return raw !== "0" && raw.toLowerCase() !== "false" && raw !== ""
+  },
 }
