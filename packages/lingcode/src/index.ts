@@ -1,6 +1,7 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import { RunCommand } from "./cli/cmd/run"
+import { BuildCommand } from "./cli/cmd/build"
 import { GenerateCommand } from "./cli/cmd/generate"
 import * as Log from "@lingcode-ai/core/util/log"
 import { ConsoleCommand } from "./cli/cmd/account"
@@ -171,6 +172,7 @@ const cli = yargs(args)
   .command(TuiThreadCommand)
   .command(AttachCommand)
   .command(RunCommand)
+  .command(BuildCommand)
   .command(GenerateCommand)
   .command(DebugCommand)
   .command(ConsoleCommand)

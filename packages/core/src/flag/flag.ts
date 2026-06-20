@@ -89,4 +89,9 @@ export const Flag = {
     if (raw === undefined) return true
     return raw !== "0" && raw.toLowerCase() !== "false" && raw !== ""
   },
+  // `lingcode build` — experimental autonomous project bootstrap (Android-first).
+  // Off by default; enable with LINGCODE_EXPERIMENTAL_BUILD=1. Access-time eval.
+  get LINGCODE_EXPERIMENTAL_BUILD() {
+    return truthy("LINGCODE_EXPERIMENTAL_BUILD")
+  },
 }
